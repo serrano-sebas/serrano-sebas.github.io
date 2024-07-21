@@ -1,0 +1,82 @@
+
+#include <conio.h>
+#include <bios.h>
+#include <time.h>
+
+int address[8]={0x3f8,0x2a0,0x2a8,0x2b0,0x2b8,0x5220,0x5228,0x2f8};
+/*int address[8]={0x3f8,0x2f8,0x3e8,0x2e8,0x4220,0x4228,0x5220,0x5228};*/
+/* Direcciones modificadas para no usar COM2-4 standard libres para mouse-modem... */
+int bauds[8]={1047,768,384,192,96,48,24,12};
+long start;
+
+long __serialcom_ticks (void)
+{
+long now;
+
+if (_bios_timeofday (_TIME_GETCLOCK,&now))
+  start=0;
+return (now-start);
+}
+
+unsigned _bios_serialcom (unsigned service,unsigned serial_port,unsigned data)
+{
+unsigned addr,r;
+
+addr=address[serial_port];
+_bios_timeofday (_TIME_GETCLOCK,&start);
+switch (service)
+ {case _COM_INIT: /* 0 */
+         r=bauds[data/32];
+         outp (addr+1,0);  /* Deshabilitar interrupciones */
+         outp (addr+4,0x0b);  /* Habilitar DTR y OUT2 */
+         outp (addr+3,0xf0);
+         outp (addr+1,r/256);
+         outp (addr,r%256);
+         outp (addr+3,data%32);
+         r=0; break;
+  case _COM_SEND: /* 1 */
+         while (!((r=inp (addr+5))&0x20))
+           if ((r&0x1e) || (__serialcom_ticks ()>10))
+             break;
+         if (r&0x20)
+          {outp (addr,data&0xff);
+           r=inp (addr+5);}
+         else
+           r|=0x80;
+         break;
+  case _COM_RECEIVE: /* 2 */
+         while (!((r=inp (addr+5))&1))
+           if ((r&0x1e) || (__serialcom_ticks ()>10))
+             break;
+         if (r&1)
+          {data=inp (addr);
+           r=inp (addr+5);}
+         else
+          r|=0x80;
+         break;
+  case _COM_STATUS: /* 3 */
+         r=inp (addr+5);
+         data=inp (addr+6); break;
+  case _COM_DTR:  /* 10 : Activa / Desactiva se?al DTR */
+         if (data)
+           outp (addr+4,1);
+         else
+           outp (addr+4,1);
+         r=inp (addr+5);
+         break;
+  case _COM_RTS:  /* 11 : Activa / Desactiva se?al RTS */
+         if (data)
+           outp (addr+4,3);
+         else
+           outp (addr+4,0);
+         r=inp (addr+5);
+         break;
+ }
+return (r*256+data);
+}
+
+void _delay (int ticks)
+{
+_bios_timeofday (_TIME_GETCLOCK,&start);
+while (__serialcom_ticks ()<ticks);
+}

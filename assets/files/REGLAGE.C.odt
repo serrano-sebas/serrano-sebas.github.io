@@ -1,0 +1,587 @@
+#include "reglage.h"
+#define TICKS_ESPERA 1
+
+int _fastcall com_lee (int *car,int max,int aut)
+{
+int i,j=0;
+do
+ i=_bios_serialcom (_COM_RECEIVE,aut,0);
+ while (((i&0x8000)!=0) && (j++<=max));
+*car=i&0xff;
+return (j>max);
+}
+
+void _fastcall finerror (int aut)
+{
+int i;
+
+while (!com_lee (&i,1,aut));
+_bios_serialcom (_COM_SEND,aut,ACK);
+}
+
+int _fastcall datatsx (char *txtout,char *txtin,int aut,int cambio_vel)
+{
+int bcc=0,lon,i,j,nack,car;
+int lonmem=txtout[2]+3;
+
+espera (TICKS_ESPERA);
+for (lon=0; lon<lonmem; lon++)
+ {
+  _bios_serialcom (_COM_SEND,aut,(car=txtout[lon]));
+  if (lon && (car==DLE))
+   {_bios_serialcom (_COM_SEND,aut,car);
+    bcc+=car;}
+  bcc+=car;}
+_bios_serialcom (_COM_SEND,aut,bcc);     /* Mensaje <DLE> <STX> <message action> */
+
+ if (com_lee (&nack,1,aut) || (((nack=nack&0xff)!=ACK) && (nack!=NACK)))
+   {_bios_serialcom (_COM_SEND,aut,DLE);
+    _bios_serialcom (_COM_SEND,aut,ENQ);
+    finerror (aut);
+    return (TRUE);}
+			   /* <ACK> TSX */
+if (cambio_vel)
+    _bios_serialcom (_COM_INIT,aut,cambio_vel);
+espera (TICKS_ESPERA);
+_bios_serialcom (_COM_SEND,aut,DLE);
+_bios_serialcom (_COM_SEND,aut,ENQ);    /* <DLE> <ENQ> reglage */
+
+if (com_lee ((int *)txtin,1,aut))
+ {finerror (aut);
+  return (TRUE);}
+if (txtin[0]==EOT)
+ {strcpy (txtin,"");
+  if (nack==NACK)
+    return (TRUE);
+  else
+    return (FALSE);
+ }
+if (txtin[0]!=DLE)
+ {finerror (aut);
+  return (TRUE);}
+if (com_lee ((int *)(txtin+1),1,aut) || (txtin[1]!=STX))
+ {finerror (aut);
+  return (TRUE);}
+if (com_lee (&lon,1,aut))
+ {finerror (aut);
+  return (TRUE);}
+txtin[2]=lon;
+bcc=DLE+STX+lon;    /* <DLE> <STX> <LON> */
+for (i=3; i<8; i++)
+ {if (com_lee (&j,1,aut))
+   {finerror (aut);
+    return (TRUE);}
+  txtin[i]=j;
+  bcc+=j;
+  lon--;}          /* <TYPE> <EXP.> <DEST.> */
+for (i=8; lon>0; lon--)
+ {if (com_lee (&j,1,aut))
+   {finerror (TRUE);
+    return (TRUE);}
+  bcc+=j;
+  if (j==DLE)
+   {if (com_lee (&j,1,aut))
+     {finerror (aut);
+      return (TRUE);}
+    if (j!=DLE)
+     {finerror (aut);
+      return (TRUE);}
+    bcc+=j;}
+  txtin[i++]=j;}        /* <CODE RESPONSE> <DATA> */
+if (com_lee (&i,1,aut))
+ {finerror (aut);
+  return (TRUE);}
+espera (TICKS_ESPERA);
+_bios_serialcom (_COM_SEND,aut,ACK);
+if (((bcc&0xff)!=i) || (nack==NACK))
+  {finerror (aut);
+   return (TRUE);}
+return (FALSE);
+}
+
+int _fastcall outmsg (int aut,char *msgout,char *msgin)
+{
+int i,j,lon;
+char buffer[70],car;
+int test[30];
+
+memcpy (msgin,"\x0\x0\x0",3);
+
+buffer[0]=DLE;
+buffer[1]=STX;
+buffer[2]=msgout[0]+6;
+buffer[3]=0xf0; /* Type */
+buffer[4]=0xfe; buffer[5]=0x01; buffer[6]=0xfe; buffer[7]=0; /* Exp , Dest */
+buffer[8]=msgout[1]; /* Code Requete */
+buffer[9]=0x03; /* Categorie */
+
+for (lon=2, i=10; lon<=msgout[0]+1; lon++, i++)  /* Data */
+ buffer[i]=msgout[lon];
+if (datatsx (buffer,msgin,aut,0))
+   return (TRUE);
+if (!msgin[0])
+    return (FALSE);
+msgin[0]=msgin[2]-5;
+for (j=1,i=8;j<=msgin[0];i++,j++)
+    msgin[j]=msgin[i];
+return (FALSE);
+}
+
+int _fastcall init_port_rs232 (int aut)
+{
+char buffer[30],resp[30];
+int i,rep=0;
+
+lee_vitesse:
+_bios_serialcom (_COM_INIT,aut,_COM_CHR8|_COM_ODDPARITY|_COM_STOP1|_COM_300);
+/* Petici?n de velocidad */
+buffer[0]=DLE;
+buffer[1]=STX;
+buffer[2]=5;
+buffer[3]=0x20;
+buffer[4]=0xfe;
+buffer[5]=1;
+buffer[6]=0xfe;
+buffer[7]=0;
+while (datatsx (buffer,resp,aut,0) || (resp[3]!=32) || !(resp[8]&16))
+    if (rep++>1)
+	return (TRUE);
+buffer[0]=DLE;
+buffer[1]=STX;
+buffer[2]=6;
+buffer[3]=0x30;
+buffer[4]=0xfe;
+buffer[5]=1;
+buffer[6]=0xfe;
+buffer[7]=0;
+buffer[8]=3;
+return
+  (datatsx (buffer,resp,aut,_COM_CHR8|_COM_ODDPARITY|_COM_STOP1|_COM_2400));
+}
+
+int _fastcall leeword (int aut,int num,int *palabra)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=4; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=3) || (buffer[1]!=0x34))
+    return (TRUE);
+*palabra=*(int *)(buffer+2);
+return (FALSE);
+}
+
+int _fastcall leecword (int aut,int num,int *palabra)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=5; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=3) || (buffer[1]!=0x35))
+    return (TRUE);
+*palabra=*(int *)(buffer+2);
+return (FALSE);
+}
+
+int _fastcall leebloque (int aut,int num,int cant,int mem[])
+{
+char msg[8],buffer[35];
+int i;
+
+msg[0]=7; msg[1]=0x36; msg[2]=0x68; msg[3]=7;
+*(int *)(msg+4)=num; *(int *)(msg+6)=cant;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=2*cant+2) || (buffer[1]!=0x66))
+    return (TRUE);
+for (i=0;i<cant;i++)
+  mem[i]=*(int *)(buffer+3+2*i);
+return (FALSE);
+}
+
+int _fastcall leebit (int aut,int num,int *bit)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=0; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=3) || (buffer[1]!=0x30))
+    return (TRUE);
+*bit=*(int *)(buffer+2)&255;
+return (FALSE);
+}
+
+int _fastcall leesys (int aut,int num,int *bit)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=1; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=2) || (buffer[1]!=0x31))
+    return (TRUE);
+*bit=*(int *)(buffer+2)&255;
+return (FALSE);
+}
+
+int leetemp (int aut,int num,int *preset,int *done,int *running,int *valor)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=9; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=9) || (buffer[1]!=0x39))
+    return (TRUE);
+*preset=*(int *)(buffer+6);
+if (done!=NULL)
+    *done=*(int *)(buffer+3)&1;
+if (running!=NULL)
+    *running=*(int *)(buffer+4)&1;
+if (valor!=NULL)
+    *valor=*(int *)(buffer+8);
+return (FALSE);
+}
+
+int leemon (int aut,int num,int *preset,int *running,int *valor)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=10; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=8) || (buffer[1]!=0x3a))
+    return (TRUE);
+*preset=*(int *)(buffer+5);
+if (running!=NULL)
+    *running=*(int *)(buffer+3)&1;
+if (valor!=NULL)
+    *valor=*(int *)(buffer+7);
+return (FALSE);
+}
+
+int leecont (int aut,int num,int *preset,int *flags,int *valor)
+{
+char buffer[30],msg[4];
+msg[0]=3; msg[1]=11; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=9) || (buffer[1]!=0x3b))
+    return (TRUE);
+*preset=*(int *)(buffer+6);
+if (flags!=NULL)
+    *flags=*(int *)(buffer+2);
+if (valor!=NULL)
+    *valor=*(int *)(buffer+8);
+return (FALSE);
+}
+
+int _fastcall writebit (int aut,int num,int valor)
+{
+char buffer[30],msg[6];
+msg[0]=4; msg[1]=0x10; *(int *)(msg+2)=num; *(msg+4)=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall writesys (int aut,int num,int valor)
+{
+char buffer[30],msg[6];
+msg[0]=4; msg[1]=0x11; *(int *)(msg+2)=num; *(msg+4)=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall writeword (int aut,int num,int valor)
+{
+char buffer[30],msg[6];
+msg[0]=5; msg[1]=0x14; *(int *)(msg+2)=num; *(int *)(msg+4)=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall writebloque (int aut,int num,int cant,int valor[])
+{
+char buffer[70],msg[70];
+int i,j;
+
+msg[1]=0x37; msg[2]=0x68; msg[3]=7;
+*(int *)(msg+4)=num; *(int *)(msg+6)=cant;
+for (i=0,j=8;i<cant;i++,j+=2)
+  *(int *)(msg+j)=valor[i];
+msg[0]=j-1;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall writetemp (int aut,int num,int valor)
+{
+char buffer[30],msg[6];
+msg[0]=5; msg[1]=0x17; *(int *)(msg+2)=num; *(int *)(msg+4)=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall writemon (int aut,int num,int valor)
+{
+char buffer[30],msg[6];
+msg[0]=5; msg[1]=0x18; *(int *)(msg+2)=num; *(int *)(msg+4)=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall writecont (int aut,int num,int valor)
+{
+char buffer[30],msg[6];
+msg[0]=5; msg[1]=0x19; *(int *)(msg+2)=num; *(int *)(msg+4)=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall leeinout (int aut,int num,int *palabra,int *forzado,char *completo)
+{
+char buffer[50],msg[4];
+msg[0]=3; msg[1]=2; *(int *)(msg+2)=num;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+if ((buffer[0]!=0x17) || (buffer[1]!=0x32))
+    return (TRUE);
+*palabra=*(int *)(buffer+9);
+*(palabra+1)=*(int *)(buffer+12);
+*(palabra+2)=*(int *)(buffer+14);
+if (forzado!=NULL)
+ { *forzado=*(int *)(buffer+17);
+   *(forzado+1)=*(int *)(buffer+20);
+   *(forzado+2)=*(int *)(buffer+22);
+ }
+if (completo!=NULL)
+  memcpy (completo,buffer+2,21);
+return (FALSE);
+}
+
+int _fastcall writeout (int aut,int num,int bit,int valor)
+{
+char buffer[30],msg[8];
+msg[0]=6; msg[1]=0x12; *(int *)(msg+2)=num|0x08000; msg[4]=1; msg[5]=bit; msg[6]=valor;
+if (outmsg (aut,msg,buffer))
+    return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall reserve (int aut)
+{
+char buffer[30],msg[3];
+msg[0]=1; msg[1]=0x1d;
+if (outmsg (aut,msg,buffer))
+  return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall release (int aut)
+{
+char buffer[30],msg[3];
+msg[0]=1; msg[1]=0x1d;
+if (outmsg (aut,msg,buffer))
+  return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall ImAlive (int aut)
+{
+char buffer[30],msg[6];
+msg[0]=3; msg[1]=0x2d; msg[2]=-2; msg[3]=1;
+if (outmsg (aut,msg,buffer))
+  return (TRUE);
+return ((buffer[0]!=1) || (buffer[1]!=TSX_OK));
+}
+
+int _fastcall TlistMem (int aut,int lonmem,char *mem)
+{
+char buffer[32],msg[32];
+int punt=0,lonpar;
+while (lonmem>0)
+ { msg[1]=0x20;
+   *(int *)(msg+2)=(punt==0 ? 0:punt+6);
+   if (punt==0)
+    { msg[5]=0; msg[6]=0;
+      msg[7]=0x50; msg[8]=0;
+      msg[9]=0; msg[10]=0;
+      if (lonmem>20)
+       { msg[0]=30;
+	 msg[4]=26;
+	 memcpy (msg+11,mem,20);
+	 lonpar=20;
+       }
+      else
+       { msg[0]=lonmem+10;
+	 msg[4]=lonmem+6;
+	 memcpy (msg+11,mem,lonmem);
+	 lonpar=lonmem;
+       }
+    }
+   else
+     if (lonmem>26)
+      { msg[0]=30;
+	msg[4]=26;
+	memcpy (msg+5,mem+punt,26);
+	lonpar=26;
+      }
+     else
+      { msg[0]=lonmem+4;
+	msg[4]=lonmem;
+	memcpy (msg+5,mem+punt,lonmem);
+	lonpar=lonmem;
+      }
+   ImAlive (aut);
+   if (outmsg (aut,msg,buffer))
+     return (TRUE);
+   if ((buffer[0]!=1) || (buffer[1]!=TSX_OK))
+     return (TRUE);
+   lonmem-=lonpar;
+   punt+=lonpar;
+ }
+return (FALSE);
+}
+
+int _fastcall TlisRead (int aut,int lonrep,char *rep)
+{
+char msg[6];
+int punt=0,lonpar;
+ImAlive (aut);
+msg[0]=1; msg[1]=0x22;
+if (outmsg (aut,msg,rep))
+  return (TRUE);
+if ((rep[0]!=1) || (rep[1]!=TSX_OK))
+  return (TRUE);
+rep[2]=1;
+while (rep[2]!=0)
+ { ImAlive (aut);
+   msg[0]=4; msg[1]=0x21; msg[2]=0x50; msg[3]=0; msg[4]=1;
+   if (outmsg (aut,msg,rep))
+     return (TRUE);
+   if ((rep[0]!=2) || (rep[1]!=0x51))
+     return (TRUE);
+ }
+while (lonrep>0)
+ { ImAlive (aut);
+   msg[0]=4;
+   msg[1]=0x21;
+   *(int *)(msg+2)=punt+0x51;
+   if (lonrep>26)
+     lonpar=26;
+   else
+     lonpar=lonrep;
+   msg[4]=(char)lonrep;
+   if (outmsg (aut,msg,rep+punt))
+     return (TRUE);
+   if ((rep[0]!=lonpar+1) || (rep[1]!=0x51))
+     return (TRUE);
+   lonrep-=lonpar;
+   while (lonpar>0)
+    { *(rep+punt)=*(rep+punt+2);
+      punt++;  lonpar--;
+    }
+ }
+return (FALSE);
+}
+
+int _fastcall Tlist (int aut,int lonmen,char *men,int lonrep,char *rep)
+{
+reserve (aut);
+TlistMem (aut,lonmen,men);
+TlisRead (aut,lonrep,rep);
+release (aut);
+}
+
+
+
+/* DITEL ALPHA-RS2 */
+
+int _fastcall outalpha (int port,char *buffer,int reply)
+{char *punt;
+ int i;
+ static first=1;
+ if (first)
+  {_bios_serialcom (_COM_INIT,port,_COM_CHR8|_COM_STOP1|_COM_NOPARITY|_COM_9600);
+   first=0;}
+ punt=buffer;
+ while (*punt)
+  {if (_bios_serialcom (_COM_SEND,port,((int)*punt)&0x0ff)&0x8000)
+     return (TRUE);
+   punt++;}
+ if (!reply)
+   return (FALSE);
+ punt=buffer;
+ do
+  {i=_bios_serialcom (_COM_RECEIVE,port,0);
+   if (i&0x8000)
+     return (TRUE);
+   *punt=i&0x0ff;}
+ while (*(punt++)!=13);
+ return (FALSE);
+} 
+
+int _fastcall leealpha (int port,int red,int dato,int *result)
+{char buffer[15],*punt;
+ int red10,i;
+  buffer[0]='*'; /* Protocolo DITEL */
+  red10=red/10; red-=red10*10;
+  buffer[1]='0'+red10;
+  buffer[2]='0'+red;
+  if (dato==0)
+   {buffer[3]='D';  /* Display */
+    buffer[4]=13;  /* CR */
+    buffer[5]=0;
+    if (outalpha (port,buffer,TRUE))
+      return (TRUE);}
+  else
+   {buffer[3]='L'; /* Setpoint */
+    buffer[4]='0'+dato;
+    buffer[5]=13;
+    buffer[6]=0;
+    if (outalpha (port,buffer,TRUE))
+      return (TRUE);}
+  *result=0; punt=buffer+2;
+  for (i=0;i<4;i++)
+   {if (*punt=='.')
+      punt++;
+    *result=*result*10+*(punt++)-'0';}
+  if (*(buffer+1)=='-')
+    *result*=-1;
+  return (FALSE);
+}
+    
+int _fastcall writealpha (int port,int red,int dato,int valor)
+{char buffer[15],*punt;
+ int red10,i;
+  if (dato==0)
+    return (TRUE); /* Display no modificable */
+  buffer[0]='*'; /* Protocolo DITEL */
+  red10=red/10; red-=red10*10;
+  buffer[1]=red10+'0';
+  buffer[2]=red+'0';
+  buffer[3]='M'; /* Setpoint */
+  buffer[4]='0'+dato;
+  if (valor<0)
+   {buffer[5]='-';
+    valor=-valor;}
+  else
+    buffer[5]='+';
+  red10=1000; punt=buffer+6;
+  while (red10>=1)
+   {*punt=valor/red10;
+    valor-=*punt*red10;
+    *(punt++)+='0';
+    red10/=10;}
+  buffer[10]='0';
+  buffer[11]='.';
+/*  sprintf (buffer+5,"%+05d0.",valor); */
+  buffer[12]=13;
+  buffer[13]=0;
+  return (outalpha (port,buffer,FALSE));
+}
+    

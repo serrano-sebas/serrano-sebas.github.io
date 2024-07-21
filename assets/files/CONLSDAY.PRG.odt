@@ -1,0 +1,280 @@
+#include "INKEY.CH"
+#include "BOX.CH"
+#include "MENU.CH"
+#include "INSTALL.H"
+
+FUNCTION CONS_DIA (ACCESO)
+LOCAL DEV,DATIN,DATEND,CANT,SALTO,SALTOP,I,MEMKG,MEMTOL,BASEOLD
+LOCAL DEVL,CANTL,SALTOL,SALTOPL,FIRSTDAY,RUNIT
+LOCAL NUMDAT,NUMPRN,RECNUM,NUMCIC,NUMPRE,NUMBAL,NUMUNT
+LOCAL PREPRE,PRETOT,UNTPRE,UNTTOT
+
+SETCOLOR ("W/B,GR+/R,,,GR+/B")
+DEV=TXT(050) /*P*/
+CANT=TXT(107) /*C*/
+SALTO=TXT(071) /*S*/
+SALTOP=TXT(072) /*N*/
+DATIN:=DATEND:=DATE()
+
+CLS
+@ 9,0 SAY PADC (TXT(007) /* LISTADO TRABAJO POR DIAS */,79)
+@12,10 SAY PADR (TXT(048) /*DISPOSITIVO DE SALIDA*/+" "+;
+                 TXT(049) /*(Pantalla/Impresora)*/,42,".")+":" GET DEV;
+  PICTURE "@!" VALID (DEV=TXT(050) /*P*/ .OR. DEV=TXT(051) /*I*/)
+@14,10 SAY PADR (TXT(109) /*LISTADO COMPLETO O PARCIAL*/+" ("+;
+                 TXT(107) /*C*/+"/"+TXT(108) /*P*/+")",42,".")+":" GET CANT;
+  PICTURE "@!" VALID (CANT=TXT(107) /*C*/ .OR. CANT=TXT(108) /*P*/)
+@15,10 SAY PADR (TXT(110) /*SALTO DE PAGINA ENTRE DIAS*/+" ("+;
+                 TXT(071) /*S*/+"/"+TXT(072) /*N*/+")",42,".")+":" GET SALTO;
+  PICTURE "@!" VALID (SALTO $ TXT(073) /*SN*/)
+@16,10 SAY PADR (TXT(238) /*SALTO DE PAGINA ENTRE PRENSAS*/+" ("+;
+                 TXT(071) /*S*/+"/"+TXT(072) /*N*/+")",42,".")+":" GET SALTOP;
+  PICTURE "@!" VALID (SALTOP $ TXT(073) /*SN*/)
+@18,10 SAY PADR (TXT(111) /*FECHA INICIAL DEL LISTADO*/,42,".")+":" GET DATIN;
+  PICTURE "@D"
+@19,10 SAY PADR (TXT(112) /*FECHA FINAL DEL LISTADO*/,42,".")+":" GET DATEND;
+  PICTURE "@D"
+@21,12 SAY TXT(004) /*ESC Para Anular*/
+READ
+@21,12 SAY SPACE (60)
+IF LASTKEY()=K_ESC
+  RETURN
+END IF
+DEVL:=(DEV==TXT(050) /*P*/)
+CANTL:=(CANT==TXT(107) /*C*/)
+SALTOL:=(SALTO==TXT(071) /*S*/)
+SALTOPL:=(SALTOP==TXT(071) /*S*/)
+
+BASEOLD=SELECT ()
+USEDBF ("RECETAS",.T.)
+USEDBF ("CONSCOL",.T.)
+USEDBF ("CONSUMOS",.T.)
+USEDBF ("PP",.T.)
+SELECT RECETAS
+
+IF ACCESO .AND. (DATEND>=DATE())
+  FOR I=0 TO NUMINSLOG-1
+    IF CARGA_CONS (I,DATE())
+      BORRA_CONS (I)
+    END IF
+  NEXT
+END IF
+
+SELECT CONSCOL
+SET ORDER TO 3
+SELECT CONSUMOS
+SET ORDER TO 4
+LISTER ({|PAG| CABECERA (L_CONSDIA,PAG,DEVL)},DEVL,1,;
+        IF (SALTOPL,{|| DTOS(CONSUMOS->FECHA)+STR(CONSUMOS->PRENSA,2,0)},;
+            IF (SALTOL,{|| DTOS(CONSUMOS->FECHA)},NIL)))
+SEEK DTOS(DATIN)
+DO WHILE !EOF() .AND. FECHA<=DATEND  /* BUCLE FECHAS */
+  PRETOT=0
+  UNTTOT=0
+  NUMDAT=FECHA
+  SEEK DTOS (NUMDAT)+" 1"+SPACE (18)+"   1"  /* PRIMER CONSUMO FECHA */
+  IF FECHA!=NUMDAT
+    LOOP
+  END IF
+  LISTER (13)
+  IF !SALTOL
+    LISTER ("")
+    LISTER ("")
+  END IF
+  LISTER (REPLICATE ("-",8)+REPLICATE ("*",8)+" "+LIT_FECHA (FECHA,0)+;
+          " "+REPLICATE ("*",8)+REPLICATE ("-",8))
+  DO WHILE !EOF() .AND. FECHA=NUMDAT /* BUCLE PRENSAS */
+    NUMPRN=PRENSA
+    PREPRE=0
+    UNTPRE=0
+    SEEK DTOS (NUMDAT)+TRANSFORM (NUMPRN,"99")+SPACE (18)+"   1"  /* PRIMER CONSUMO PRENSA */
+    IF FECHA!=NUMDAT .OR. PRENSA!=NUMPRN
+      LOOP
+    END IF
+    SELECT PP
+    GOTO NUMPRN
+    IF NUMPRENSAS>1
+      LISTER ("")
+      LISTER (TXT(239) /*PRENSA*/+":"+PP->NAME)
+    END IF
+    SELECT CONSUMOS
+    DO WHILE !EOF() .AND. FECHA=NUMDAT .AND. PRENSA=NUMPRN /* BUCLE REF+COD+REC */
+      RECNUM=DTOS (NUMDAT)+TRANSFORM (NUMPRN,"99")+;
+             REF+PREFIJO+TRANSFORM (NUMREC,"9999")
+      LISTER ("")
+      LISTER (TXT(352) /*O.T.*/+":"+REF+"  "+;
+              TXT(236) /*CODIGO FABRICACION*/+":"+PREFIJO+"  "+;
+              TXT(034) /*NUM. RECETA*/+":"+TRANSFORM (NUMREC,"9999"))
+      SELECT RECETAS
+      SEEK TRANSFORM (CONSUMOS->NUMREC,"9999")
+      IF FOUND()
+        LISTER ("   "+TXT(037) /*REFERENCIA*/+": "+RECETAS->REF)
+        LISTER ("   "+TXT(055) /*DENOMINACION*/+": "+DENOM)
+        RUNIT=UNIT
+      ELSE
+        RUNIT="?"
+      END IF
+      SELECT CONSUMOS  /* CONTADOR PRENSADAS-BALDOSAS-UNIT */
+      NUMPRE=0
+      NUMBAL=0
+      NUMUNT=0
+      DO WHILE !EOF() .AND.;
+         DTOS (FECHA)+TRANSFORM (PRENSA,"99")+REF+PREFIJO+;
+           TRANSFORM (NUMREC,"9999")==RECNUM
+        DO CASE
+          CASE CODMAT="  #P"
+            NUMPRE+=KGCONS
+          CASE CODMAT="  #Q"
+            NUMBAL+=KGCONS
+          CASE CODMAT="  #S"
+            NUMUNT+=KGCONS/100
+        END CASE
+        SKIP
+      END DO
+      SEEK RECNUM
+#ifdef PRG_BALDOSAS
+      LISTER (TXT(113) /*NUM. PRENSADAS PARCIAL*/+":"+;
+              ALLTRIM (TRANSFORM (NUMPRE,"999,999"))+"  "+;
+              TXT(114) /*PIEZAS*/+":"+;
+              ALLTRIM (TRANSFORM (NUMBAL,"999,999"))+"  "+;
+              TXT(115) /*FABRICADO*/+":"+;
+              ALLTRIM (TRANSFORM (NUMUNT,"99,999,999.99 ")+RUNIT))
+#endif
+      IF CANTL
+        DO WHILE !EOF() .AND.;
+           DTOS (FECHA)+TRANSFORM (PRENSA,"99")+REF+PREFIJO+;
+             TRANSFORM (NUMREC,"9999")==RECNUM  /* BUCLE MATERIALES */
+          DO CASE
+           CASE CODMAT="  ##"
+            IF NUMREC2A!=0  /* COMIENZO RECETA 2? CAPA */
+              LISTER ("")
+              LISTER ("")
+              LISTER (TXT(034) /*NUM. RECETA*/+": "+TRANSFORM (NUMREC2A,"9999")+;
+                      "   "+TXT_SUBORD /*2? CAPA*/)
+              SELECT RECETAS
+              SEEK TRANSFORM (CONSUMOS->NUMREC2A,"9999")
+              IF FOUND()
+                LISTER (TXT(037) /*REFERENCIA*/+": "+REF)
+                LISTER (TXT(055) /*DENOMINACION*/+": "+DENOM)
+              END IF
+              SELECT CONSUMOS
+            END IF
+            LISTER (TXT(056) /*CICLOS*/+": "+TRANSFORM (KGCONS,"99,999"))
+            IF RECETAS->(FOUND())
+              IF !EMPTY (RECETAS->CODAD) .AND. (RECETAS->TADIT>0)
+                LISTER (TXT(066) /*ADITIVO*/+RECETAS->CODAD+": "+;
+                        ALLTRIM (TRANSFORM (KGCONS*RECETAS->TADIT/60,;
+                                            "999,999.9 min")))
+              END IF
+            END IF
+            #ifdef PRG_BALDOSAS
+            LISTER (SPACE(10)+TXT(118) /*CODMAT*/+SPACE(3)+TXT(018) /*CONSUMIDO*/+;
+                    SPACE(3)+TXT(119) /*DOS/PIEZA*/+SPACE(3)+TXT(058) /*DOS.MEDIA*/+;
+                    SPACE(3)+TXT(057) /*PROGRAMADO*/+SPACE(2)+TXT(120) /*TOLVA*/)
+            LISTER (SPACE(10)+"======  ===========  =========  ===========   ==========  =====")
+            #else
+            LISTER (SPACE(10)+TXT(118) /*CODMAT*/+SPACE(3)+TXT(018) /*CONSUMIDO*/+;
+                    SPACE(3)+TXT(058) /*DOS.MEDIA*/+SPACE(3)+TXT(057) /*PROGRAMADO*/+;
+                    SPACE(2)+TXT(120) /*TOLVA*/)
+            LISTER (SPACE(10)+"======  ===========  ===========  ==========  =====")
+            #endif
+            NUMCIC=KGCONS
+            LIST_COL (RECNUM,NUMBAL,NUMCIC)
+           CASE CODMAT="  #P"
+           CASE CODMAT="  #Q"
+           CASE CODMAT="  #S"
+           OTHERWISE
+            #ifdef PRG_BALDOSAS
+            LISTER (SPACE(11)+CODMAT+SPACE(3)+;
+                    TRANSFORM (KGCONS,"999,999,999")+SPACE(2)+;
+                    IF (NUMBAL=0,"---------",;
+                        TRANSFORM (KGCONS/NUMBAL,"9,999.999"))+SPACE(4)+;
+                    IF (NUMCIC=0,"-------",;
+                        TRANSFORM (KGCONS/NUMCIC,"9,999.9"))+SPACE(6))
+            #else
+            LISTER (SPACE(11)+CODMAT+SPACE(3)+;
+                    TRANSFORM (KGCONS,"999,999,999")+SPACE(4)+;
+                    IF (NUMCIC=0,"-------",;
+                        TRANSFORM (KGCONS/NUMCIC,"9,999.9"))+SPACE(6))
+            #endif
+            IF RECETAS->(FOUND())
+              SELECT RECETAS
+              MEMKG=0
+              MEMTOL=""
+              FOR I=4 TO 3+K_NUMPROD
+                IF FIELDGET (I)==CONSUMOS->CODMAT
+                  MEMKG+=FIELDGET (I+16)
+                  MEMTOL+=" "+NAMEPROD[I-3]
+                END IF
+              NEXT
+              LISTER (TRANSFORM (MEMKG,"9,999")+SPACE(5)+MEMTOL,.T.)
+              SELECT CONSUMOS
+            END IF
+          END CASE
+          SKIP
+        END DO
+      ELSE
+        SEEK RECNUM+CHR(255)  /* FINAL BUCLE */
+      END IF
+      PREPRE+=NUMPRE
+      UNTPRE+=NUMUNT
+    END DO  /* BUCLE COD-REF-REC */
+  SKIP -1 /* PARA EVITAR SALTO DE PAG. */
+#ifdef PRG_BALDOSAS
+  LISTER ("")
+  LISTER (TXT(117) /* NUM PRENSADAS TOTAL*/+": "+;
+          ALLTRIM (TRANSFORM (PREPRE,"999,999"))+"  "+;
+          TXT(115) /* FABRICADO */+": "+;
+          ALLTRIM (TRANSFORM (UNTPRE,"99,999,999.99"))+" "+RUNIT)
+#endif
+  LISTER ("")
+  PRETOT+=PREPRE
+  UNTTOT+=UNTPRE
+  SKIP
+  END DO /* BUCLE PRENSAS */
+#ifdef PRG_BALDOSAS
+IF NUMPRENSAS>1
+  SKIP -1
+  LISTER (TXT(117) /* NUM PRENSADAS TOTAL */+": "+;
+          ALLTRIM (TRANSFORM (PRETOT,"999,999"))+"  "+;
+          TXT(115) /*FABRICADO*/+": "+;
+          ALLTRIM (TRANSFORM (UNTTOT,"99,999,999.99"))+" "+RUNIT)
+  SKIP
+END IF
+#endif
+END DO /* BUCLE FECHAS */
+LISTER ()
+USEDBF ("RECETAS",.F.)
+USEDBF ("CONSCOL",.F.)
+USEDBF ("CONSUMOS",.F.)
+USEDBF ("PP",.F.)
+SELECT (BASEOLD)
+RETURN
+
+STATIC FUNCTION LIST_COL (RECNUM,NUMBAL,NUMCIC)
+
+SELECT CONSCOL
+SEEK RECNUM
+DO WHILE !EOF() .AND.;
+    DTOS (FECHA)+TRANSFORM (PRENSA,"99")+REF+PREFIJO+;
+        TRANSFORM (NUMREC,"9999")==RECNUM .AND.;
+    NUMREC2A==CONSUMOS->NUMREC2A
+#ifdef PRG_BALDOSAS
+  LISTER (SPACE(11)+CODMAT+SPACE(2)+;
+          TRANSFORM (KGCONS,"999,999,999")+SPACE(2)+;
+          IF (NUMBAL=0,"---------",;
+              TRANSFORM (KGCONS/NUMBAL,"9,999.999"))+SPACE(4)+;
+          IF (NUMCIC=0,"-------",;
+              TRANSFORM (KGCONS/NUMCIC,"9,999.9"))+SPACE(6)+;
+          "("+TXT(380) /* gr */+")")
+#else
+  LISTER (SPACE(11)+CODMAT+SPACE(3)+;
+          TRANSFORM (KGCONS,"999,999,999")+SPACE(4)+;
+          IF (NUMCIC=0,"-------",;
+              TRANSFORM (KGCONS/NUMCIC,"9,999.9"))+SPACE(6)+;
+          "("+TXT(380) /* gr */+")")
+#endif
+  SKIP
+END DO
+SELECT CONSUMOS
+RETURN NIL

@@ -1,0 +1,164 @@
+program ConversionArticuloT4;
+const
+  blanco6='      ';
+  blanco8='        ';
+  blanco12='            ';
+  blanco24='                        ';
+  comprimido=#15;
+  descomprimido=#18;
+  maxlineacons=57;
+  gastos_grales=35;
+  benef_indust=20;
+  path_referencia='c:\serrano\';
+
+type
+  lit3=packed array [1..3] of char;
+  lit6=packed array [1..6] of char;
+  lit8=packed array [1..8] of char;
+  lit10=packed array [1..10] of char;
+  lit12=packed array [1..12] of char;
+  lit24=packed array [1..24] of char;
+  restyp=(matcom,matfab,trabext,alm,mob,maq,homob,homaq);
+  type logico=(EQ,LT,GT);
+  varres=array [restyp] of real;
+  date=record
+    dia:1..31;
+    mes:lit3;
+    anio:0..99
+    end;
+  articulo=record
+    codigo:lit8;
+    denominacion:lit24;
+    stock,stockres,stockmin:real;
+    prtar,dto:real;
+    acunenan,acunentot,acunsal:real;
+    acvlenan,acvlentot,acvlsal:real;
+    prultcomp:real;
+    fechaultcomp:date;
+    codprov:lit6;
+    pv1,pv2:real;
+    valcosnomat:real;
+    codmat:lit8;
+    unmat:real
+    end;
+  filart=file of articulo;
+  codproveedor=record
+    extcod:lit24;
+    intcod:lit8;
+    denom:lit24;
+    uncomp,pvcomp,pr_ult:real
+    end;
+  filprov=file of codproveedor;
+  resumen=record
+    codigo:lit8;
+    denominacion:lit24;
+    cliente:lit6;
+    unidades:real;
+    fechadel,fechaini:date;
+    memoria:varres;
+    costo,costotal,valortotal:real;
+    gastogral,benefind:real;
+    next:integer
+    end;
+  director=record
+    codigo:lit8;
+    pos:integer
+    end;
+  fildirect=file of director;
+  libreria=record
+    codigo:lit8;
+    denominacion:lit24;
+    volumen:lit8
+    end;
+  ordenfab=record
+    codigo:lit8;
+    denominacion:lit24;
+    unidadpres,unidadreal,unidadres:real;
+    precio,impacum:real
+    end;
+  ordenheat=record
+    codigo:lit8;
+    denominacion:lit24;
+    fecha:date;
+    unidadfab:integer;
+    cliente:lit6
+    end;
+  streen=string[80];
+  camtype=record
+    x,y:integer
+    end;
+  linea=record
+    codigo:lit8;
+    unidades:real;
+    prunit,prdto,prtotal:real;
+    denom:lit24;
+    cliente:lit6;
+    difer:real;
+    numext:integer
+    end;
+  puntreglin=^reglin;
+  reglin=record
+    tex:array[1..100] of linea;
+    next:puntreglin
+    end;
+  referencia=record
+    codigo:lit8;
+    cantidad:real;
+    next:integer
+    end;
+
+var
+  buf:articulo;
+  t:file of articulo;
+  d:text;
+  i:integer;
+
+begin
+  i:=0;
+  assign (t,'c:\serrano\almacen\articulo.dat');
+  assign (d,'articulo.asc');
+  reset (t);
+  rewrite (d);
+  while not eof(t) do
+    begin
+      i:=i+1;
+      read (t,buf);
+      with buf do
+        begin
+          write (d,codigo:8,denominacion:24,stock:12:3,
+                   stockmin:12:3,prtar:11:2,dto:6:2,
+                   acunenan:13:3,acunentot:13:3,acunsal:13:3,
+                   acvlenan:13:2,acvlentot:13:2,acvlsal:13:2,
+                   prultcomp:11:2);
+          with fechaultcomp do
+            begin
+              write (d,dia:2,'/');
+              case mes[1] of
+                'E': write (d,'01');
+                'F': write (d,'02');
+                'M': case mes[3] of
+                       'R': write (d,'03');
+                       'Y': write (d,'05');
+                       end;
+                'A': case mes[2] of
+                       'B': write (d,'04');
+                       'G': write (d,'08');
+                       end;
+                'J': case mes[3] of
+                      'N': write (d,'06');
+                      'L': write (d,'07');
+                      end;
+                'S': write (d,'09');
+                'O': write (d,'10');
+                'N': write (d,'11');
+                'D': write (d,'12');
+                end;
+              write (d,'/19',anio:2);
+              end;
+          writeln (d,codprov:6,pv1:11:2,pv2:11:2,valcosnomat:11:2);
+          writeln (i:5,codigo:9,denominacion:25,stock:15:4);
+          end;
+      end;
+  close (d);
+  close (t)
+  end.
